@@ -1,74 +1,83 @@
-# 服务器端代码 (server.py)
-
 import asyncio
 import websockets
+import socket
 
 # 存储所有连接的客户端
 clients = set()
 
 async def handle_client(websocket, path):
-    # 注册新客户端
     clients.add(websocket)
     try:
         async for message in websocket:
-            # 打印接收到的消息
             print(f"收到消息: {message}")
-            # 广播消息给所有客户端
             await broadcast(message)
     finally:
-        # 客户端断开连接时移除
         clients.remove(websocket)
 
 async def broadcast(message):
-    # 向所有连接的客户端发送消息
     for client in clients:
         try:
             await client.send(message)
         except websockets.exceptions.ConnectionClosed:
-            pass  # 忽略已关闭的连接
+            pass
 
-async def main():
-    # 启动WebSocket服务器
-    server = await websockets.serve(handle_client, "0.0.0.0", 8765)
-    print("服务器已启动，等待客户端连接...")
+async def start_server(host, port):
+    server = await websockets.serve(handle_client, host, port)
+    print(f"服务器正在运行于 {host}:{port}")
     await server.wait_closed()
 
-if __name__ == "__main__":
-    asyncio.run(main())
-
-# 客户端代码 (client.py)
-
-import asyncio
-import websockets
-
-async def receive_messages(websocket):
-    # 持续接收服务器发送的消息
-    while True:
-        try:
+async def client_receive(websocket):
+    try:
+        while True:
             message = await websocket.recv()
-            print(f"收到消息: {message}")
-        except websockets.exceptions.ConnectionClosed:
-            print("连接已关闭")
-            break
+            print(f"收到: {message}")
+    except websockets.exceptions.ConnectionClosed:
+        print("连接已关闭")
 
-async def send_messages(websocket):
-    # 持续从控制台读取输入并发送消息
-    while True:
-        message = input("输入消息 (输入 'quit' 退出): ")
-        if message.lower() == 'quit':
-            break
-        await websocket.send(message)
+async def client_send(websocket):
+    try:
+        while True:
+            message = await asyncio.get_event_loop().run_in_executor(None, input, "输入消息: ")
+            await websocket.send(message)
+            if message.lower() == 'quit':
+                break
+    except asyncio.CancelledError:
+        pass
 
-async def main():
-    # 服务器的WebSocket URL
-    uri = "ws://localhost:8765"  # 如果服务器不在本地，请替换为实际IP地址
+async def start_client(uri):
     async with websockets.connect(uri) as websocket:
-        print("已连接到服务器")
-        # 创建接收和发送消息的任务
-        receive_task = asyncio.create_task(receive_messages(websocket))
-        send_task = asyncio.create_task(send_messages(websocket))
-        # 等待任意一个任务完成
+        print(f"已连接到 {uri}")
+        receive_task = asyncio.create_task(client_receive(websocket))
+        send_task = asyncio.create_task(client_send(websocket))
         await asyncio.gather(receive_task, send_task)
 
+def get_local_ip():
+    try:
+        # 创建一个临时套接字连接到一个公共 DNS 服务器
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except:
+        return "127.0.0.1"
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("WebSocket 聊天程序")
+    print("1. 运行服务器")
+    print("2. 运行客户端")
+    choice = input("请选择模式 (1/2): ")
+
+    if choice == "1":
+        host = get_local_ip()
+        port = 8765
+        print(f"服务器将在 {host}:{port} 上运行")
+        print(f"客户端可以使用以下地址连接：ws://{host}:{port}")
+        asyncio.run(start_server(host, port))
+    elif choice == "2":
+        host = input("输入服务器 IP 地址 (默认为 localhost): ") or "localhost"
+        port = input("输入服务器端口 (默认为 8765): ") or 8765
+        uri = f"ws://{host}:{port}"
+        asyncio.run(start_client(uri))
+    else:
+        print("无效的选择")
