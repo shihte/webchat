@@ -1,16 +1,29 @@
 import asyncio
 import websockets
 import socket
+import json
 
-# 存储所有连接的客户端
+# 存儲所有連接的客戶端
 clients = set()
+
+# 聊天記錄
+chat_history = []
 
 async def handle_client(websocket, path):
     clients.add(websocket)
     try:
+        # 發送聊天歷史
+        await websocket.send(json.dumps({"type": "history", "messages": chat_history}))
+        
         async for message in websocket:
-            print(f"收到消息: {message}")
-            await broadcast(message)
+            data = json.loads(message)
+            if data["type"] == "chat":
+                chat_message = f"{data['name']}: {data['message']}"
+                chat_history.append(chat_message)
+                if len(chat_history) > 100:  # 限制歷史記錄數量
+                    chat_history.pop(0)
+                print(chat_message)
+                await broadcast(json.dumps({"type": "chat", "message": chat_message}))
     finally:
         clients.remove(websocket)
 
@@ -23,37 +36,42 @@ async def broadcast(message):
 
 async def start_server(host, port):
     server = await websockets.serve(handle_client, host, port)
-    print(f"服务器正在运行于 {host}:{port}")
+    print(f"服務器正在運行於 {host}:{port}")
     await server.wait_closed()
 
 async def client_receive(websocket):
     try:
         while True:
             message = await websocket.recv()
-            print(f"收到: {message}")
+            data = json.loads(message)
+            if data["type"] == "history":
+                print("聊天歷史:")
+                for msg in data["messages"]:
+                    print(msg)
+            elif data["type"] == "chat":
+                print(data["message"])
     except websockets.exceptions.ConnectionClosed:
-        print("连接已关闭")
+        print("連接已關閉")
 
-async def client_send(websocket):
+async def client_send(websocket, name):
     try:
         while True:
-            message = await asyncio.get_event_loop().run_in_executor(None, input, "输入消息: ")
-            await websocket.send(message)
+            message = await asyncio.get_event_loop().run_in_executor(None, input, "")
             if message.lower() == 'quit':
                 break
+            await websocket.send(json.dumps({"type": "chat", "name": name, "message": message}))
     except asyncio.CancelledError:
         pass
 
-async def start_client(uri):
+async def start_client(uri, name):
     async with websockets.connect(uri) as websocket:
-        print(f"已连接到 {uri}")
+        print(f"已連接到 {uri}")
         receive_task = asyncio.create_task(client_receive(websocket))
-        send_task = asyncio.create_task(client_send(websocket))
+        send_task = asyncio.create_task(client_send(websocket, name))
         await asyncio.gather(receive_task, send_task)
 
 def get_local_ip():
     try:
-        # 创建一个临时套接字连接到一个公共 DNS 服务器
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         local_ip = s.getsockname()[0]
@@ -62,22 +80,17 @@ def get_local_ip():
     except:
         return "127.0.0.1"
 
-if __name__ == "__main__":
-    print("WebSocket 聊天程序")
-    print("1. 运行服务器")
-    print("2. 运行客户端")
-    choice = input("请选择模式 (1/2): ")
+async def main():
+    host = get_local_ip()
+    port = 8765
+    name = input("請輸入您的名字: ")
+    
+    try:
+        # 首先嘗試作為客戶端連接
+        await start_client(f"ws://{host}:{port}", name)
+    except ConnectionRefusedError:
+        print("無法連接到現有服務器，正在啟動新的服務器...")
+        await start_server(host, port)
 
-    if choice == "1":
-        host = get_local_ip()
-        port = 8765
-        print(f"服务器将在 {host}:{port} 上运行")
-        print(f"客户端可以使用以下地址连接：ws://{host}:{port}")
-        asyncio.run(start_server(host, port))
-    elif choice == "2":
-        host = input("输入服务器 IP 地址 (默认为 localhost): ") or "localhost"
-        port = input("输入服务器端口 (默认为 8765): ") or 8765
-        uri = f"ws://{host}:{port}"
-        asyncio.run(start_client(uri))
-    else:
-        print("无效的选择")
+if __name__ == "__main__":
+    asyncio.run(main())
